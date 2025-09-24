@@ -1,0 +1,75 @@
+# Archivos de usuario de Visual Studio
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Carpeta de configuración de VS
+.vs/
+
+# Build results
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+
+# Publicaciones / Deploy
+[Pp]ublish/
+out/
+
+# Archivos de paquetes NuGet
+*.nupkg
+# Directorios de paquetes
+**/packages/*
+# except if you have a .nuspec file in there
+!**/packages/*.nuspec
+
+# Archivos de configuración de Rider / VS Code
+.idea/
+.vscode/
+
+# Archivos de prueba
+TestResults/
+*.coverage
+*.coveragexml
+
+# Archivos temporales
+*.tmp
+*.temp
+
+# Archivos generados
+*.dll
+*.exe
+*.pdb
+
+# Archivos de usuario de configuración local
+appsettings.Development.json
+appsettings.Local.json
+secrets.json
+
+# Logs
+*.log
+
+# Archivos de publicación de IIS / Azure
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Archivos generados por EF Core
+Migrations/
+
+# Sistema operativo
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Archivos de reciclaje
+$RECYCLE.BIN/
+
+# Archivos de publicación de Visual Studio
+*.Publish.xml
+*.pubxml
+*.publishproj
+
+# Otros
+node_modules/
+wwwroot/lib/
