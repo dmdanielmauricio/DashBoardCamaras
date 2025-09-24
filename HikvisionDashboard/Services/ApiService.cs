@@ -11,18 +11,19 @@ namespace ANPRViewer.Services
     {
         private readonly HttpClient _httpClient;
         private readonly string _apiUrl;
-
-        // 🔹 Guardar los IDs de detecciones ya procesadas
-        private readonly HashSet<string> _processedDetections = new();
+        private bool _isConnected = true; // Estado inicial asumido como conectado
 
         public event Action<AnprDetection>? DetectionReceived;
         public event Action<string>? ErrorOccurred;
+        public event Action<bool>? ApiConnectionChanged;
+        private readonly HashSet<string> _processedDetections = new();
+
 
         public ApiService(string apiUrl)
         {
             _httpClient = new HttpClient
             {
-                Timeout = TimeSpan.FromSeconds(10) // Control de timeout
+                Timeout = TimeSpan.FromSeconds(10)
             };
             _apiUrl = apiUrl;
         }
@@ -32,10 +33,14 @@ namespace ANPRViewer.Services
             try
             {
                 var response = await _httpClient.GetAsync(_apiUrl);
-                return response.IsSuccessStatusCode;
+                var ok = response.IsSuccessStatusCode;
+
+                UpdateConnectionStatus(ok);
+                return ok;
             }
             catch
             {
+                UpdateConnectionStatus(false);
                 return false;
             }
         }
@@ -45,23 +50,25 @@ namespace ANPRViewer.Services
             try
             {
                 var response = await _httpClient.GetAsync(_apiUrl);
-
                 response.EnsureSuccessStatusCode();
-                var json = await response.Content.ReadAsStringAsync();
 
+                var json = await response.Content.ReadAsStringAsync();
                 return JsonSerializer.Deserialize<List<AnprDetection>>(json) ?? new List<AnprDetection>();
             }
             catch (TaskCanceledException)
             {
+                ApiConnectionChanged?.Invoke(false);
                 ErrorOccurred?.Invoke("Tiempo de espera excedido al consultar la API.");
                 return new List<AnprDetection>();
             }
             catch (Exception ex)
             {
+                ApiConnectionChanged?.Invoke(false);
                 ErrorOccurred?.Invoke(ex.Message);
                 return new List<AnprDetection>();
             }
         }
+
 
         public void StartPolling(int intervalSeconds = 5)
         {
@@ -73,20 +80,21 @@ namespace ANPRViewer.Services
                     {
                         var detections = await FetchDetectionsAsync();
 
-                        foreach (var detection in detections)
+                        if (detections.Count > 0)
                         {
-                            // Generamos un ID único (Placa + AbsTime)
-                            var detectionId = $"{detection.Placa}-{detection.AbsTime}";
+                            ApiConnectionChanged?.Invoke(true);
 
-                            // Solo procesamos si no está repetido
-                            if (_processedDetections.Add(detectionId))
+                            foreach (var detection in detections)
                             {
-                                DetectionReceived?.Invoke(detection);
+                                var detectionId = $"{detection.Placa}-{detection.AbsTime}";
+                                if (_processedDetections.Add(detectionId))
+                                    DetectionReceived?.Invoke(detection);
                             }
                         }
                     }
                     catch (Exception ex)
                     {
+                        ApiConnectionChanged?.Invoke(false);
                         ErrorOccurred?.Invoke(ex.Message);
                     }
 
@@ -95,9 +103,20 @@ namespace ANPRViewer.Services
             });
         }
 
+
+        private void UpdateConnectionStatus(bool connected)
+        {
+            if (_isConnected != connected)
+            {
+                _isConnected = connected;
+                ApiConnectionChanged?.Invoke(connected);
+            }
+        }
+
         public void Dispose()
         {
             _httpClient.Dispose();
         }
     }
 }
+

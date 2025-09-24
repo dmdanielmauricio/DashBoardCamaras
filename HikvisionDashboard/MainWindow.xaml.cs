@@ -6,14 +6,12 @@ using ANPRViewer.ViewModels;
 using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.IO;
-using System.Diagnostics;
-
 
 namespace HikvisionDashboard
 {
@@ -22,11 +20,12 @@ namespace HikvisionDashboard
         private readonly ConfigurationService _configService;
         private readonly ApiService _apiService;
         private int _capturesCount = 0;
+        private bool _apiErrorShown = false;   // 🔹 flag para no spamear mensajes
 
         // 🔹 Colección para el panel lateral
         private readonly ObservableCollection<EventItemVm> _recentEvents = new();
-
         public ObservableCollection<EventItemVm> RecentEvents => _recentEvents;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -35,10 +34,10 @@ namespace HikvisionDashboard
 
             _apiService.DetectionReceived += OnDetectionReceived;
             _apiService.ErrorOccurred += OnApiError;
+            _apiService.ApiConnectionChanged += OnApiConnectionChanged;
 
             DataContext = this;
-        }// Necesario para el binding del XAML
-
+        }
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
@@ -60,9 +59,9 @@ namespace HikvisionDashboard
             {
                 Logger.Error("Error al cargar MainWindow", ex);
             }
+
             // Iniciar el .exe externo al cargar el dashboard
             StartExternalApp();
-
         }
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
@@ -73,56 +72,74 @@ namespace HikvisionDashboard
         // 👇 Aquí ajustas tu grid de cámaras como ya lo tienes implementado
         private void LoadCameras()
         {
-            // ...
+            try
+            {
+                CameraGrid.Children.Clear();
+                CameraGrid.RowDefinitions.Clear();
+                CameraGrid.ColumnDefinitions.Clear();
+
+                // ✅ Filtrar cámaras habilitadas desde appsettings.json
+                var enabledCameras = _configService.Settings.Cameras
+                    .Where(c => c.Enabled)
+                    .Take(_configService.Settings.MaxStreams)
+                    .ToList();
+
+                int count = enabledCameras.Count;
+                if (count == 0)
+                {
+                    CameraStatusText.Text = "0/0 Cámaras habilitadas";
+                    return;
+                }
+
+                // ✅ Calcular distribución de filas y columnas (grid cuadrado)
+                int rows = (int)Math.Ceiling(Math.Sqrt(count));
+                int cols = (int)Math.Ceiling((double)count / rows);
+
+                for (int r = 0; r < rows; r++)
+                    CameraGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+                for (int c = 0; c < cols; c++)
+                    CameraGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                // ✅ Insertar dinámicamente los controles de cámara
+                int index = 0;
+                foreach (var cam in enabledCameras)
+                {
+                    var control = new CameraControlOpenCV();
+                    control.SetCamera(cam);
+
+                    int row = index / cols;
+                    int col = index % cols;
+
+                    Grid.SetRow(control, row);
+                    Grid.SetColumn(control, col);
+
+                    CameraGrid.Children.Add(control);
+                    index++;
+                }
+
+                CameraStatusText.Text = $"{count}/{_configService.Settings.Cameras.Count} Cámaras habilitadas";
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Error cargando cámaras", ex);
+            }
         }
+
 
         /// <summary>
-        /// Agrega un evento al panel lateral (solo Camara#X).
+        /// Evento recibido desde la API
         /// </summary>
-        private void AddRecentEvent(AnprDetection detection)
-        {
-            // Solo mostrar fotos de Camara#X
-            if (!(detection.ImageUrl.Contains("Camara1X") ||
-                  detection.ImageUrl.Contains("Camara2X") ||
-                  detection.ImageUrl.Contains("Camara3X") ||
-                  detection.ImageUrl.Contains("Camara4X")))
-                return;
-
-            // Evitar duplicados
-            var key = $"{detection.Placa}-{detection.AbsTime}";
-            if (RecentEvents.Any(e => e.UniqueKey == key))
-                return;
-
-            // Crear item
-            var fullUrl = $"{_configService.Settings.ApiUrl}{detection.ImageUrl}";
-            var item = new EventItemVm(detection, fullUrl);
-
-            RecentEvents.Insert(0, item);
-
-            // Mantener máximo 15
-            if (RecentEvents.Count > 15)
-                RecentEvents.RemoveAt(RecentEvents.Count - 1);
-
-            // 🔹 Actualizar contador con eventos válidos
-            _capturesCount = RecentEvents.Count;
-            UpdateCaptureStatus();
-        }
-
-        //eventos de la api
         private void OnDetectionReceived(AnprDetection detection)
         {
             Dispatcher.Invoke(() =>
             {
                 try
                 {
-                    // ❌ Ignorar placas vacías o desconocidas
                     if (string.IsNullOrWhiteSpace(detection.Placa) ||
                         detection.Placa.Equals("unknown", StringComparison.OrdinalIgnoreCase))
-                    {
                         return;
-                    }
 
-                    // ✅ Solo mostrar capturas de Camara#X
                     if (detection.ImageUrl.Contains("Camara1X") ||
                         detection.ImageUrl.Contains("Camara2X") ||
                         detection.ImageUrl.Contains("Camara3X") ||
@@ -130,7 +147,7 @@ namespace HikvisionDashboard
                     {
                         var vm = new EventItemVm(detection, _configService.Settings.ApiBaseUrl);
 
-                        // Evitar duplicados (Placa + Hora + Camara)
+                        // Evitar duplicados (placa + hora + camara)
                         bool exists = _recentEvents.Any(e =>
                             e.Placa == vm.Placa &&
                             e.Hora == vm.Hora &&
@@ -138,20 +155,16 @@ namespace HikvisionDashboard
 
                         if (!exists)
                         {
-                            // Insertar al inicio
                             _recentEvents.Insert(0, vm);
 
-                            // Mantener máximo 10
                             while (_recentEvents.Count > 10)
                                 _recentEvents.RemoveAt(_recentEvents.Count - 1);
 
-                            // ✅ Solo aquí incrementar el contador
-                            _capturesCount = _recentEvents.Count;
+                            _capturesCount++;
                             CaptureStatusText.Text = $"{_capturesCount} capturas obtenidas";
                         }
                     }
 
-                    // 🔹 Actualizar Entrada / Salida (siempre)
                     UpdateEntradaSalida(detection);
                 }
                 catch (Exception ex)
@@ -162,26 +175,45 @@ namespace HikvisionDashboard
         }
 
 
+        // 🔹 Error controlado: solo muestra un mensaje una vez hasta que reconecte
         private void OnApiError(string message)
         {
-            Dispatcher.BeginInvoke(new Action(() =>
+            Dispatcher.Invoke(() =>
             {
+                // Cambiar a rojo
                 ApiStatusIndicator.Fill = new SolidColorBrush(Colors.Red);
+
+                // Mostrar error (una sola vez por desconexión si quieres)
+                MessageBox.Show($"Error al consultar la API:\n{message}",
+                    "Error de conexión", MessageBoxButton.OK, MessageBoxImage.Error);
+
                 Logger.Error("Error API: " + message);
-            }));
+            });
         }
 
+        private void OnApiConnectionChanged(bool isConnected)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                ApiStatusIndicator.Fill = new SolidColorBrush(isConnected ? Colors.Green : Colors.Red);
+
+                if (isConnected)
+                {
+                    // 🔹 Resetear flag → permitirá mostrar mensaje si vuelve a fallar
+                    _apiErrorShown = false;
+                }
+            });
+        }
 
         private void UpdateCaptureStatus()
         {
             CaptureStatusText.Text = $"{_capturesCount} capturas obtenidas";
-
         }
+
         private void UpdateEntradaSalida(AnprDetection detection)
         {
             var fullUrl = $"{_configService.Settings.ApiBaseUrl}{detection.ImageUrl}";
 
-            // Entrada: Camara1 o Camara3
             if (detection.ImageUrl.Contains("Camara1/") || detection.ImageUrl.Contains("Camara3/"))
             {
                 EntradaImage.Source = new BitmapImage(new Uri(fullUrl, UriKind.Absolute));
@@ -189,7 +221,6 @@ namespace HikvisionDashboard
                 EntradaDateText.Text = detection.Timestamp.ToString("dd/MM/yyyy HH:mm:ss");
             }
 
-            // Salida: Camara2 o Camara4
             if (detection.ImageUrl.Contains("Camara2/") || detection.ImageUrl.Contains("Camara4/"))
             {
                 SalidaImage.Source = new BitmapImage(new Uri(fullUrl, UriKind.Absolute));
@@ -198,52 +229,46 @@ namespace HikvisionDashboard
             }
         }
 
-        // 👇 Evento del botón "Iniciar App Externa"
+        // 👇 Iniciar el .exe externo
         private void StartExternalApp()
+        {
+            try
             {
-                try
+                var exePath = _configService.Settings.ExternalExecutablePath;
+
+                if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
                 {
-                    var exePath = _configService.Settings.ExternalExecutablePath;
+                    MessageBox.Show("La ruta del ejecutable no es válida.",
+                                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
 
-                    if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
-                    {
-                        MessageBox.Show("La ruta del ejecutable no es válida.",
-                                        "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        return;
-                    }
-
-                    // Nombre del proceso (sin extensión .exe)
-                    var processName = Path.GetFileNameWithoutExtension(exePath);
-
-                    // Verificar si ya está corriendo
-                    var running = Process.GetProcessesByName(processName).Any();
-                    if (running)
-                    {
-                        MessageBox.Show("El Plate ya está iniciado.",
-                                        "Información", MessageBoxButton.OK, MessageBoxImage.Information);
-
-                        PlateStatusIndicator.Fill = new SolidColorBrush(Colors.Green);
-                        return;
-                    }
-
-                    // Iniciar el proceso
-                    Process.Start(new ProcessStartInfo
-                    {
-                        FileName = exePath,
-                        UseShellExecute = true // Necesario para apps .NET/Win32
-                    });
+                var processName = Path.GetFileNameWithoutExtension(exePath);
+                var running = Process.GetProcessesByName(processName).Any();
+                if (running)
+                {
+                    MessageBox.Show("El Plate ya está iniciado.",
+                                    "Información", MessageBoxButton.OK, MessageBoxImage.Information);
 
                     PlateStatusIndicator.Fill = new SolidColorBrush(Colors.Green);
+                    return;
                 }
-                catch (Exception ex)
+
+                Process.Start(new ProcessStartInfo
                 {
-                    MessageBox.Show($"Error iniciando el Plate: {ex.Message}",
-                                    "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    PlateStatusIndicator.Fill = new SolidColorBrush(Colors.Red);
-                }
+                    FileName = exePath,
+                    UseShellExecute = true
+                });
+
+                PlateStatusIndicator.Fill = new SolidColorBrush(Colors.Green);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error iniciando el Plate: {ex.Message}",
+                                "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                PlateStatusIndicator.Fill = new SolidColorBrush(Colors.Red);
+            }
         }
-
-
-     }
+    }
 }
 
