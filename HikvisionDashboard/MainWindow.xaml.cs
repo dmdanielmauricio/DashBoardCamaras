@@ -128,7 +128,7 @@ namespace HikvisionDashboard
 
 
         /// <summary>
-        /// Evento recibido desde la API
+        /// Evento recibido desde la API..
         /// </summary>
         private void OnDetectionReceived(AnprDetection detection)
         {
