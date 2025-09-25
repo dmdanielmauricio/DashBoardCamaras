@@ -8,6 +8,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -78,22 +79,25 @@ namespace HikvisionDashboard
                 CameraGrid.RowDefinitions.Clear();
                 CameraGrid.ColumnDefinitions.Clear();
 
-                // ✅ Filtrar cámaras habilitadas desde appsettings.json
                 var enabledCameras = _configService.Settings.Cameras
                     .Where(c => c.Enabled)
-                    .Take(_configService.Settings.MaxStreams)
                     .ToList();
 
-                int count = enabledCameras.Count;
+                // Limitar por MaxStreams
+                int maxStreams = _configService.Settings.MaxStreams;
+                if (maxStreams <= 0) maxStreams = enabledCameras.Count; // fallback
+                var cams = enabledCameras.Take(maxStreams).ToList();
+
+                int count = cams.Count;
                 if (count == 0)
                 {
                     CameraStatusText.Text = "0/0 Cámaras habilitadas";
                     return;
                 }
 
-                // ✅ Calcular distribución de filas y columnas (grid cuadrado)
-                int rows = (int)Math.Ceiling(Math.Sqrt(count));
-                int cols = (int)Math.Ceiling((double)count / rows);
+                // 👉 columnas = MaxStreams (o menos si hay menos cámaras)
+                int cols = Math.Max(1, Math.Min(maxStreams, count));
+                int rows = (int)Math.Ceiling(count / (double)cols);
 
                 for (int r = 0; r < rows; r++)
                     CameraGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -101,21 +105,19 @@ namespace HikvisionDashboard
                 for (int c = 0; c < cols; c++)
                     CameraGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-                // ✅ Insertar dinámicamente los controles de cámara
-                int index = 0;
-                foreach (var cam in enabledCameras)
+                for (int i = 0; i < count; i++)
                 {
                     var control = new CameraControlOpenCV();
-                    control.SetCamera(cam);
+                    control.SetCamera(cams[i]);
 
-                    int row = index / cols;
-                    int col = index % cols;
+                    int row = i / cols;
+                    int col = i % cols;
 
                     Grid.SetRow(control, row);
                     Grid.SetColumn(control, col);
+                    control.Margin = new Thickness(6, 0, 6, 6);
 
                     CameraGrid.Children.Add(control);
-                    index++;
                 }
 
                 CameraStatusText.Text = $"{count}/{_configService.Settings.Cameras.Count} Cámaras habilitadas";
@@ -125,7 +127,6 @@ namespace HikvisionDashboard
                 Logger.Error("Error cargando cámaras", ex);
             }
         }
-
 
         /// <summary>
         /// Evento recibido desde la API..
@@ -209,25 +210,152 @@ namespace HikvisionDashboard
         {
             CaptureStatusText.Text = $"{_capturesCount} capturas obtenidas";
         }
+      
+        // ===== Helpers =====
+        private static int? ParseLane(string? s)
+            => int.TryParse(s, out var n) ? n : null;
 
-        private void UpdateEntradaSalida(AnprDetection detection)
+        private static int? CameraFromUrl(string? url)
         {
-            var fullUrl = $"{_configService.Settings.ApiBaseUrl}{detection.ImageUrl}";
+            if (string.IsNullOrWhiteSpace(url)) return null;
+            var u = url.Replace('\\', '/').ToUpperInvariant();
+            for (int i = 1; i <= 8; i++)
+                if (u.Contains($"/CAMARA{i}X/") || u.Contains($"/CAMARA{i}/"))
+                    return i;
+            return null;
+        }
 
-            if (detection.ImageUrl.Contains("Camara1/") || detection.ImageUrl.Contains("Camara3/"))
+        private static bool IsProcessed(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            return url.Replace('\\', '/').ToUpperInvariant().Contains("/Procesado/");
+        }
+
+        private static bool IsX(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            var u = url.Replace('\\', '/').ToUpperInvariant();
+            return u.Contains("/Camara1X/") || u.Contains("/Camara2X/")
+                || u.Contains("/Camara3X/") || u.Contains("/Camara4X/");
+        }
+
+        private static string? BuildProcessedFromX(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return null;
+            var u = url.Replace('\\', '/');
+            var parts = u.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 4) return null;
+
+            var camPart = parts[1];  // Camara2X
+            if (!camPart.EndsWith("X", StringComparison.OrdinalIgnoreCase)) return null;
+
+            var cam = camPart[..^1];   // Camara2
+            var date = parts[2];
+            var file = parts[^1];
+            return "/" + string.Join('/', parts[0], cam, date, "Procesado", file);
+        }
+
+
+        private string MakeFullUrl(string relativeOrAbsolute)
+        {
+            if (string.IsNullOrWhiteSpace(relativeOrAbsolute)) return "";
+            if (relativeOrAbsolute.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                return relativeOrAbsolute;
+
+            var baseUrl = _configService.Settings.ApiBaseUrl?.TrimEnd('/') ?? "";
+            var path = relativeOrAbsolute.TrimStart('/');
+            return $"{baseUrl}/{path}";
+        }
+
+        private ImageSource? LoadHttpImage(string url)
+        {
+            try
             {
-                EntradaImage.Source = new BitmapImage(new Uri(fullUrl, UriKind.Absolute));
-                EntradaPlateText.Text = detection.Placa;
-                EntradaDateText.Text = detection.Timestamp.ToString("dd/MM/yyyy HH:mm:ss");
+                using var client = new HttpClient();
+                var data = client.GetByteArrayAsync(url).Result;
+
+                using var ms = new MemoryStream(data);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.StreamSource = ms;
+                bmp.EndInit();
+                bmp.Freeze(); // 🔹 Congela el objeto para que sea seguro en cualquier hilo
+                return bmp;
             }
-
-            if (detection.ImageUrl.Contains("Camara2/") || detection.ImageUrl.Contains("Camara4/"))
+            catch (Exception ex)
             {
-                SalidaImage.Source = new BitmapImage(new Uri(fullUrl, UriKind.Absolute));
-                SalidaPlateText.Text = detection.Placa;
-                SalidaDateText.Text = detection.Timestamp.ToString("dd/MM/yyyy HH:mm:ss");
+                Logger.Error($"Error cargando imagen desde {url}: {ex.Message}");
+                return null;
             }
         }
+
+        private void UpdateEntradaSalida(AnprDetection d)
+        {
+            try
+            {
+                int? lane = ParseLane(d.Lane);
+                int? cam = CameraFromUrl(d.ImageUrl);
+
+                bool esEntrada = (lane is 1 or 3) || (cam is 1 or 3);
+                bool esSalida = (lane is 2 or 4) || (cam is 2 or 4);
+                if (!esEntrada && !esSalida) return;
+
+                // 2) Seleccionar URL candidata
+                var urls = new List<string>();
+                if (IsProcessed(d.ImageUrl))
+                {
+                    urls.Add(d.ImageUrl!);
+                }
+                else if (IsX(d.ImageUrl))
+                {
+                    var proc = BuildProcessedFromX(d.ImageUrl!);
+                    if (proc != null) urls.Add(proc);
+                    urls.Add(d.ImageUrl!);
+                }
+                else
+                {
+                    urls.Add(d.ImageUrl!);
+                }
+
+                // 3) Intentar cargar imagen
+                ImageSource? img = null;
+                string? elegido = null;
+                foreach (var u in urls)
+                {
+                    var abs = MakeFullUrl(u);
+                    img = LoadHttpImage(abs);
+                    if (img != null) { elegido = abs; break; }
+                }
+                if (img == null) return;
+
+                var ts = d.Timestamp == default ? DateTime.Now : d.Timestamp;
+
+                // 🔹 Actualización de UI en el hilo correcto
+                Dispatcher.Invoke(() =>
+                {
+                    if (esEntrada)
+                    {
+                        EntradaImage.Source = img;
+                        EntradaPlateText.Text = d.Placa;
+                        EntradaDateText.Text = ts.ToString("dd/MM/yyyy HH:mm:ss");
+                        Logger.Info($"ENTRADA -> {d.Placa} | {elegido}");
+                    }
+                    else if (esSalida)
+                    {
+                        SalidaImage.Source = img;
+                        SalidaPlateText.Text = d.Placa;
+                        SalidaDateText.Text = ts.ToString("dd/MM/yyyy HH:mm:ss");
+                        Logger.Info($"SALIDA -> {d.Placa} | {elegido}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Error en UpdateEntradaSalida: {ex.Message}");
+            }
+        }
+
 
         // 👇 Iniciar el .exe externo
         private void StartExternalApp()

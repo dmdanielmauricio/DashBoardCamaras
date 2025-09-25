@@ -82,20 +82,20 @@
                 <!-- Entrada / Salida -->
             </Grid.RowDefinitions>
 
-            <!-- Panel de cámaras -->
+           
             <!-- Panel de cámaras con borde redondeado -->
-<Border Grid.Column="0"
-        Grid.Row="0"
-        Margin="10,3,10,35"
-        CornerRadius="15"
-        Background="#2B2B40"
-        SnapsToDevicePixels="True">
-    <Border.Effect>
-        <DropShadowEffect Color="Black" BlurRadius="12" ShadowDepth="3" Opacity="0.3"/>
-    </Border.Effect>
+            <Border Grid.Column="0"
+                Grid.Row="0"
+                Margin="10,3,10,35"
+                CornerRadius="15"
+                Background="#2B2B40"
+                SnapsToDevicePixels="True">
+                <Border.Effect>
+                    <DropShadowEffect Color="Black" BlurRadius="12" ShadowDepth="3" Opacity="0.3"/>
+                </Border.Effect>
 
-    <Grid x:Name="CameraGrid" Background="Transparent"/>
-</Border>
+                 <Grid x:Name="CameraGrid" Background="Transparent"/>
+            </Border>
 
 
             <!-- PANEL LATERAL -->
@@ -191,9 +191,7 @@
                             <Border.Effect>
                                 <DropShadowEffect Color="Black" BlurRadius="8" ShadowDepth="2" Opacity="0.4"/>
                             </Border.Effect>
-                            <Image x:Name="EntradaImage"
-                             Stretch="Uniform"
-                             ClipToBounds="True" Margin="16,10,0,1"/>
+                            <Image x:Name="EntradaImage" Stretch="Uniform" ClipToBounds="True" />
                         </Border>
 
                         <TextBlock x:Name="EntradaPlateText" Foreground="Lime" FontWeight="Bold" FontSize="20"/>
@@ -214,9 +212,7 @@
                             <Border.Effect>
                                 <DropShadowEffect Color="Black" BlurRadius="8" ShadowDepth="2" Opacity="0.4"/>
                             </Border.Effect>
-                            <Image x:Name="SalidaImage"
-                               Stretch="Uniform"
-                               ClipToBounds="True" Margin="16,10,0,1"/>
+                            <Image x:Name="SalidaImage"  Stretch="Uniform" ClipToBounds="True" />
                         </Border>
 
                         <TextBlock x:Name="SalidaPlateText" Foreground="Lime" FontWeight="Bold" FontSize="20"/>
@@ -224,7 +220,6 @@
                     </StackPanel>
                 </Border>
             </Grid>
-
         </Grid>
     </DockPanel>
 </Window>
