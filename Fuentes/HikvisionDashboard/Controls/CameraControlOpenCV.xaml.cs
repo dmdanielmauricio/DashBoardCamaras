@@ -49,7 +49,6 @@ namespace ANPRViewer.Controls
 
         private async Task StartCameraAsync(string rtspUrl, CancellationToken token)
         {
-
             if (string.IsNullOrWhiteSpace(rtspUrl))
             {
                 await Dispatcher.InvokeAsync(() =>
@@ -65,12 +64,15 @@ namespace ANPRViewer.Controls
                 _capture?.Release();
                 _capture?.Dispose();
 
-                // Reemplazamos la configuración de GStreamer con la de OpenCV
-                _capture = new VideoCapture(rtspUrl);
+                // Abrir con backend FFMPEG (más estable para RTSP)
+                _capture = new VideoCapture(rtspUrl, VideoCaptureAPIs.FFMPEG);
 
-                // Opción para forzar la decodificación por hardware si está disponible
-                // _capture.Set(VideoCaptureProperties.HwAccel, 1);
-                // _capture.Set(VideoCaptureProperties.GstreamerHwAccel, 1);
+                // 🔹 Ajustes de cámara para que coincidan con tu configuración
+                _capture.Set(VideoCaptureProperties.Fps, 22);              // igual a la cámara
+                _capture.Set(VideoCaptureProperties.FrameWidth, 1280);     // resolución
+                _capture.Set(VideoCaptureProperties.FrameHeight, 720);
+                _capture.Set(VideoCaptureProperties.BufferSize, 2);        // evitar lag, descartar frames viejos
+                _capture.Set(VideoCaptureProperties.FourCC, FourCC.H264);  // codec forzado a H.264
 
                 if (!_capture.IsOpened())
                 {
@@ -118,7 +120,8 @@ namespace ANPRViewer.Controls
                         });
                     }
 
-                    await Task.Delay(1, token);
+                    // 🔹 Ajusta la frecuencia de lectura a los FPS reales
+                    await Task.Delay(1000 / 22, token);
                 }
             }
             catch (OperationCanceledException)
