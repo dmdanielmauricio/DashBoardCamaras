@@ -129,26 +129,32 @@ namespace HikvisionDashboard
         }
 
         /// <summary>
-        /// Evento recibido desde la API..
+        /// Evento recibido desde la API
         /// </summary>
         private void OnDetectionReceived(AnprDetection detection)
         {
+            Logger.Info($"OnDetectionReceived -> Placa: {detection.Placa}, Url: {detection.ImageUrl}");
+
             Dispatcher.Invoke(() =>
             {
                 try
                 {
                     if (string.IsNullOrWhiteSpace(detection.Placa) ||
                         detection.Placa.Equals("unknown", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Logger.Info("Descartado: Placa vacía o unknown");
                         return;
+                    }
 
+                    // 👉 Panel lateral
                     if (detection.ImageUrl.Contains("Camara1X") ||
                         detection.ImageUrl.Contains("Camara2X") ||
                         detection.ImageUrl.Contains("Camara3X") ||
                         detection.ImageUrl.Contains("Camara4X"))
                     {
+                        Logger.Info($"Agregando al panel lateral: {detection.Placa}");
                         var vm = new EventItemVm(detection, _configService.Settings.ApiBaseUrl);
 
-                        // Evitar duplicados (placa + hora + camara)
                         bool exists = _recentEvents.Any(e =>
                             e.Placa == vm.Placa &&
                             e.Hora == vm.Hora &&
@@ -157,7 +163,6 @@ namespace HikvisionDashboard
                         if (!exists)
                         {
                             _recentEvents.Insert(0, vm);
-
                             while (_recentEvents.Count > 10)
                                 _recentEvents.RemoveAt(_recentEvents.Count - 1);
 
@@ -166,6 +171,8 @@ namespace HikvisionDashboard
                         }
                     }
 
+                    // 👉 Entrada / Salida
+                    Logger.Info($"Llamando UpdateEntradaSalida con {detection.ImageUrl}");
                     UpdateEntradaSalida(detection);
                 }
                 catch (Exception ex)
@@ -175,20 +182,21 @@ namespace HikvisionDashboard
             });
         }
 
-
         // 🔹 Error controlado: solo muestra un mensaje una vez hasta que reconecte
         private void OnApiError(string message)
         {
             Dispatcher.Invoke(() =>
             {
-                // Cambiar a rojo
                 ApiStatusIndicator.Fill = new SolidColorBrush(Colors.Red);
 
-                // Mostrar error (una sola vez por desconexión si quieres)
-                MessageBox.Show($"Error al consultar la API:\n{message}",
-                    "Error de conexión", MessageBoxButton.OK, MessageBoxImage.Error);
+                if (!_apiErrorShown)
+                {
+                    MessageBox.Show($"Error al consultar la API:\n{message}",
+                        "Error de conexión", MessageBoxButton.OK, MessageBoxImage.Error);
 
-                Logger.Error("Error API: " + message);
+                    Logger.Error("Error API: " + message);
+                    _apiErrorShown = true;
+                }
             });
         }
 
@@ -200,7 +208,6 @@ namespace HikvisionDashboard
 
                 if (isConnected)
                 {
-                    // 🔹 Resetear flag → permitirá mostrar mensaje si vuelve a fallar
                     _apiErrorShown = false;
                 }
             });
@@ -210,7 +217,7 @@ namespace HikvisionDashboard
         {
             CaptureStatusText.Text = $"{_capturesCount} capturas obtenidas";
         }
-      
+
         // ===== Helpers =====
         private static int? ParseLane(string? s)
             => int.TryParse(s, out var n) ? n : null;
@@ -225,36 +232,19 @@ namespace HikvisionDashboard
             return null;
         }
 
-        private static bool IsProcessed(string? url)
+        // ✅ Solo Camara# en carpeta Procesado
+        private static bool IsRecorte(string? url)
         {
             if (string.IsNullOrWhiteSpace(url)) return false;
-            return url.Replace('\\', '/').ToUpperInvariant().Contains("/Procesado/");
-        }
 
-        private static bool IsX(string? url)
-        {
-            if (string.IsNullOrWhiteSpace(url)) return false;
             var u = url.Replace('\\', '/').ToUpperInvariant();
-            return u.Contains("/Camara1X/") || u.Contains("/Camara2X/")
-                || u.Contains("/Camara3X/") || u.Contains("/Camara4X/");
+
+            return u.Contains("/PROCESADO/") &&
+                  ((u.Contains("/CAMARA1/") && !u.Contains("CAMARA1X")) ||
+                   (u.Contains("/CAMARA2/") && !u.Contains("CAMARA2X")) ||
+                   (u.Contains("/CAMARA3/") && !u.Contains("CAMARA3X")) ||
+                   (u.Contains("/CAMARA4/") && !u.Contains("CAMARA4X")));
         }
-
-        private static string? BuildProcessedFromX(string url)
-        {
-            if (string.IsNullOrWhiteSpace(url)) return null;
-            var u = url.Replace('\\', '/');
-            var parts = u.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 4) return null;
-
-            var camPart = parts[1];  // Camara2X
-            if (!camPart.EndsWith("X", StringComparison.OrdinalIgnoreCase)) return null;
-
-            var cam = camPart[..^1];   // Camara2
-            var date = parts[2];
-            var file = parts[^1];
-            return "/" + string.Join('/', parts[0], cam, date, "Procesado", file);
-        }
-
 
         private string MakeFullUrl(string relativeOrAbsolute)
         {
@@ -280,7 +270,7 @@ namespace HikvisionDashboard
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
                 bmp.StreamSource = ms;
                 bmp.EndInit();
-                bmp.Freeze(); // 🔹 Congela el objeto para que sea seguro en cualquier hilo
+                bmp.Freeze();
                 return bmp;
             }
             catch (Exception ex)
@@ -294,68 +284,65 @@ namespace HikvisionDashboard
         {
             try
             {
+                Logger.Info($"UpdateEntradaSalida -> Url: {d.ImageUrl}, Lane: {d.Lane}, Placa: {d.Placa}");
+
+                if (!IsRecorte(d.ImageUrl))
+                {
+                    Logger.Info("Descartado: No es recorte válido (Camara# en Procesado)");
+                    return;
+                }
+
                 int? lane = ParseLane(d.Lane);
                 int? cam = CameraFromUrl(d.ImageUrl);
 
+                Logger.Info($"Lane={lane}, Cam={cam}");
+
                 bool esEntrada = (lane is 1 or 3) || (cam is 1 or 3);
                 bool esSalida = (lane is 2 or 4) || (cam is 2 or 4);
-                if (!esEntrada && !esSalida) return;
 
-                // 2) Seleccionar URL candidata
-                var urls = new List<string>();
-                if (IsProcessed(d.ImageUrl))
+                Logger.Info($"esEntrada={esEntrada}, esSalida={esSalida}");
+
+                if (!esEntrada && !esSalida)
                 {
-                    urls.Add(d.ImageUrl!);
-                }
-                else if (IsX(d.ImageUrl))
-                {
-                    var proc = BuildProcessedFromX(d.ImageUrl!);
-                    if (proc != null) urls.Add(proc);
-                    urls.Add(d.ImageUrl!);
-                }
-                else
-                {
-                    urls.Add(d.ImageUrl!);
+                    Logger.Info("Descartado: no corresponde a entrada/salida");
+                    return;
                 }
 
-                // 3) Intentar cargar imagen
-                ImageSource? img = null;
-                string? elegido = null;
-                foreach (var u in urls)
+                var abs = MakeFullUrl(d.ImageUrl!);
+                Logger.Info($"Url final: {abs}");
+
+                var img = LoadHttpImage(abs);
+                if (img == null)
                 {
-                    var abs = MakeFullUrl(u);
-                    img = LoadHttpImage(abs);
-                    if (img != null) { elegido = abs; break; }
+                    Logger.Error("No se pudo cargar la imagen desde la URL");
+                    return;
                 }
-                if (img == null) return;
 
                 var ts = d.Timestamp == default ? DateTime.Now : d.Timestamp;
 
-                // 🔹 Actualización de UI en el hilo correcto
                 Dispatcher.Invoke(() =>
                 {
                     if (esEntrada)
                     {
+                        Logger.Info($"Mostrando ENTRADA -> {d.Placa}");
                         EntradaImage.Source = img;
                         EntradaPlateText.Text = d.Placa;
                         EntradaDateText.Text = ts.ToString("dd/MM/yyyy HH:mm:ss");
-                        Logger.Info($"ENTRADA -> {d.Placa} | {elegido}");
                     }
                     else if (esSalida)
                     {
+                        Logger.Info($"Mostrando SALIDA -> {d.Placa}");
                         SalidaImage.Source = img;
                         SalidaPlateText.Text = d.Placa;
                         SalidaDateText.Text = ts.ToString("dd/MM/yyyy HH:mm:ss");
-                        Logger.Info($"SALIDA -> {d.Placa} | {elegido}");
                     }
                 });
             }
             catch (Exception ex)
             {
-                Logger.Error($"Error en UpdateEntradaSalida: {ex.Message}");
+                Logger.Error($"Error en UpdateEntradaSalida: {ex.Message}", ex);
             }
         }
-
 
         // 👇 Iniciar el .exe externo
         private void StartExternalApp()

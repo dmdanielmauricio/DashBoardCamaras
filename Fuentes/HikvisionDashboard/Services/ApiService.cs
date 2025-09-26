@@ -18,7 +18,6 @@ namespace ANPRViewer.Services
         public event Action<bool>? ApiConnectionChanged;
         private readonly HashSet<string> _processedDetections = new();
 
-
         public ApiService(string apiUrl)
         {
             _httpClient = new HttpClient
@@ -69,7 +68,6 @@ namespace ANPRViewer.Services
             }
         }
 
-
         public void StartPolling(int intervalSeconds = 5)
         {
             Task.Run(async () =>
@@ -86,7 +84,8 @@ namespace ANPRViewer.Services
 
                             foreach (var detection in detections)
                             {
-                                var detectionId = $"{detection.Placa}-{detection.AbsTime}";
+                                // ✅ Ahora se incluye ImageUrl en la clave
+                                var detectionId = $"{detection.Placa}-{detection.AbsTime}-{detection.ImageUrl}";
                                 if (_processedDetections.Add(detectionId))
                                     DetectionReceived?.Invoke(detection);
                             }
@@ -103,7 +102,6 @@ namespace ANPRViewer.Services
             });
         }
 
-
         private void UpdateConnectionStatus(bool connected)
         {
             if (_isConnected != connected)
@@ -119,4 +117,3 @@ namespace ANPRViewer.Services
         }
     }
 }
-
