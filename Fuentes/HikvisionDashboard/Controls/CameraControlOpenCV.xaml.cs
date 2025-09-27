@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using ANPRViewer.Models;
 
 namespace ANPRViewer.Controls
@@ -43,7 +44,6 @@ namespace ANPRViewer.Controls
             _cancellationTokenSource?.Dispose();
 
             _cancellationTokenSource = new CancellationTokenSource();
-
             _ = StartCameraAsync(camera.RtspUrl, _cancellationTokenSource.Token);
         }
 
@@ -64,15 +64,15 @@ namespace ANPRViewer.Controls
                 _capture?.Release();
                 _capture?.Dispose();
 
-                // Abrir con backend FFMPEG (más estable para RTSP)
+                // 🔹 Abrir con backend FFMPEG (más estable para RTSP)
                 _capture = new VideoCapture(rtspUrl, VideoCaptureAPIs.FFMPEG);
 
-                // 🔹 Ajustes de cámara para que coincidan con tu configuración
-                _capture.Set(VideoCaptureProperties.Fps, 22);              // igual a la cámara
-                _capture.Set(VideoCaptureProperties.FrameWidth, 1280);     // resolución
+                // 🔹 Ajustes clave (igual al código viejo)
+                _capture.Set(VideoCaptureProperties.BufferSize, 1); // evitar acumulación
+                _capture.Set(VideoCaptureProperties.FourCC, FourCC.H264); // codec correcto
+                _capture.Set(VideoCaptureProperties.Fps, 30); // estabilizar a 30fps
+                _capture.Set(VideoCaptureProperties.FrameWidth, 1280);
                 _capture.Set(VideoCaptureProperties.FrameHeight, 720);
-                _capture.Set(VideoCaptureProperties.BufferSize, 2);        // evitar lag, descartar frames viejos
-                _capture.Set(VideoCaptureProperties.FourCC, FourCC.H264);  // codec forzado a H.264
 
                 if (!_capture.IsOpened())
                 {
@@ -100,13 +100,16 @@ namespace ANPRViewer.Controls
 
                 while (!token.IsCancellationRequested && _capture.IsOpened() && !_isDisposed)
                 {
-                    if (!_capture.Read(frame) || frame.Empty())
+                    // 🔹 Usamos Grab + Retrieve en vez de Read (menos delay)
+                    if (!_capture.Grab() || !_capture.Retrieve(frame) || frame.Empty())
                     {
-                        await Task.Delay(10, token);
+                        await Task.Delay(30, token); // breve pausa si no hay frame
                         continue;
                     }
 
+                    // Convertir a WriteableBitmap y congelar (mejor rendimiento en WPF)
                     var image = frame.ToWriteableBitmap();
+                    image.Freeze();
 
                     if (!token.IsCancellationRequested)
                     {
@@ -120,8 +123,8 @@ namespace ANPRViewer.Controls
                         });
                     }
 
-                    // 🔹 Ajusta la frecuencia de lectura a los FPS reales
-                    await Task.Delay(1000 / 22, token);
+                    // 🔹 Mantener frame rate estable (≈30fps)
+                    await Task.Delay(33, token);
                 }
             }
             catch (OperationCanceledException)
