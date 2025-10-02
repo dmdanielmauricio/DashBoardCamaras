@@ -15,7 +15,8 @@
           "OpenCvSharp4": "4.11.0.20250507",
           "OpenCvSharp4.Extensions": "4.11.0.20250507",
           "OpenCvSharp4.WpfExtensions": "4.11.0.20250507",
-          "OpenCvSharp4.runtime.win": "4.11.0.20250507"
+          "OpenCvSharp4.runtime.win": "4.11.0.20250507",
+          "System.Management": "9.0.9"
         },
         "runtime": {
           "HikvisionDashboard.dll": {}
@@ -170,9 +171,21 @@
           }
         }
       },
+      "System.CodeDom/9.0.9": {},
       "System.Drawing.Common/8.0.11": {
         "dependencies": {
           "Microsoft.Win32.SystemEvents": "8.0.0"
+        }
+      },
+      "System.Management/9.0.9": {
+        "dependencies": {
+          "System.CodeDom": "9.0.9"
+        },
+        "runtime": {
+          "runtimes/win/lib/net9.0/System.Management.dll": {
+            "assemblyVersion": "9.0.0.9",
+            "fileVersion": "9.0.925.41916"
+          }
         }
       },
       "System.Memory/4.6.3": {}
@@ -282,12 +295,26 @@
       "path": "opencvsharp4.wpfextensions/4.11.0.20250507",
       "hashPath": "opencvsharp4.wpfextensions.4.11.0.20250507.nupkg.sha512"
     },
+    "System.CodeDom/9.0.9": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-Az4ngSi0MO3Qwu1+BJRHnc2C8e7+x0oXj+Q++C/wru0vM8J2oL3QlliiZPdwPnR0VbiL0lH7izSIGQssMaRiGQ==",
+      "path": "system.codedom/9.0.9",
+      "hashPath": "system.codedom.9.0.9.nupkg.sha512"
+    },
     "System.Drawing.Common/8.0.11": {
       "type": "package",
       "serviceable": true,
       "sha512": "sha512-AVyutHHKrX0Mt9C9T8W3Ccat3cVauUwvN+EqnVpSQi92nwBqoQ+2ZRvGP1S+rKK+6TGXmRflSYNShVjl2mMBlw==",
       "path": "system.drawing.common/8.0.11",
       "hashPath": "system.drawing.common.8.0.11.nupkg.sha512"
+    },
+    "System.Management/9.0.9": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-U+OnvxuFi/V0++P98Auba1pAyaOXU5EioSz0xczgFsB7l/sPX9Ix4rWwI+lXJG4/icPieeRsfpXPEIcSBTQShw==",
+      "path": "system.management/9.0.9",
+      "hashPath": "system.management.9.0.9.nupkg.sha512"
     },
     "System.Memory/4.6.3": {
       "type": "package",

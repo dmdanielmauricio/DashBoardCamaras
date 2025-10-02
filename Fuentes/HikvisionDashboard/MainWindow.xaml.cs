@@ -11,6 +11,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
@@ -76,16 +77,13 @@ namespace HikvisionDashboard
             try
             {
                 CameraGrid.Children.Clear();
-                CameraGrid.RowDefinitions.Clear();
-                CameraGrid.ColumnDefinitions.Clear();
 
                 var enabledCameras = _configService.Settings.Cameras
                     .Where(c => c.Enabled)
                     .ToList();
 
-                // Limitar por MaxStreams
                 int maxStreams = _configService.Settings.MaxStreams;
-                if (maxStreams <= 0) maxStreams = enabledCameras.Count; // fallback
+                if (maxStreams <= 0) maxStreams = enabledCameras.Count;
                 var cams = enabledCameras.Take(maxStreams).ToList();
 
                 int count = cams.Count;
@@ -95,28 +93,18 @@ namespace HikvisionDashboard
                     return;
                 }
 
-                // 👉 columnas = MaxStreams (o menos si hay menos cámaras)
-                int cols = Math.Max(1, Math.Min(maxStreams, count));
+                // 👉 Configuramos filas/columnas en UniformGrid
+                int cols = (int)Math.Ceiling(Math.Sqrt(count));
                 int rows = (int)Math.Ceiling(count / (double)cols);
 
-                for (int r = 0; r < rows; r++)
-                    CameraGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                (CameraGrid as UniformGrid)!.Rows = rows;
+                (CameraGrid as UniformGrid)!.Columns = cols;
 
-                for (int c = 0; c < cols; c++)
-                    CameraGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-                for (int i = 0; i < count; i++)
+                foreach (var cam in cams)
                 {
                     var control = new CameraControlOpenCV();
-                    control.SetCamera(cams[i]);
-
-                    int row = i / cols;
-                    int col = i % cols;
-
-                    Grid.SetRow(control, row);
-                    Grid.SetColumn(control, col);
-                    control.Margin = new Thickness(6, 0, 6, 6);
-
+                    control.SetCamera(cam);
+                    control.Margin = new Thickness(3);
                     CameraGrid.Children.Add(control);
                 }
 
@@ -127,6 +115,7 @@ namespace HikvisionDashboard
                 Logger.Error("Error cargando cámaras", ex);
             }
         }
+
 
         /// <summary>
         /// Evento recibido desde la API

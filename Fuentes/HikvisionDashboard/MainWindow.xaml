@@ -75,26 +75,26 @@
                 <ColumnDefinition Width="251" />
                 <!-- Panel lateral -->
             </Grid.ColumnDefinitions>
+            
             <Grid.RowDefinitions>
-                <RowDefinition />
-                <!-- Cámaras -->
-                <RowDefinition Height="172.04" />
-                <!-- Entrada / Salida -->
+                <RowDefinition Height="*" />
+                <!-- Cámaras ocupan casi todo -->
+                <RowDefinition Height="Auto" />
+                <!-- Entrada / Salida se ajusta -->
             </Grid.RowDefinitions>
 
-           
-            <!-- Panel de cámaras con borde redondeado -->
+            <!-- Panel de cámaras -->
             <Border Grid.Column="0"
                 Grid.Row="0"
-                Margin="10,3,10,35"
+               Margin="5"
                 CornerRadius="15"
-                Background="#2B2B40"
                 SnapsToDevicePixels="True">
-                <Border.Effect>
-                    <DropShadowEffect Color="Black" BlurRadius="12" ShadowDepth="3" Opacity="0.3"/>
-                </Border.Effect>
+                        <Border.Effect>
+                            <DropShadowEffect Color="Black" BlurRadius="12" ShadowDepth="3" Opacity="0.3"/>
+                        </Border.Effect>
 
-                 <Grid x:Name="CameraGrid" Background="Transparent"/>
+                <!-- Este Grid es el que usa LoadCameras() -->
+                <UniformGrid x:Name="CameraGrid" Background="Black" Margin="0,0,0,32"/>
             </Border>
 
 
@@ -140,7 +140,7 @@
                                             <Image Source="{Binding FullImageUrl}"
                                                    Width="120"
                                                    Height="90"
-                                                   Stretch="UniformToFill"
+                                                   Stretch="Uniform"
                                                    Grid.Column="0"
                                                    Margin="0,0,10,0"
                                                    ClipToBounds="True"/>

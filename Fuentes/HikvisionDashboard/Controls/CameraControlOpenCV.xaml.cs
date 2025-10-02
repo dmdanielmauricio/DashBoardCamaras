@@ -1,14 +1,16 @@
-﻿using OpenCvSharp;
+﻿using ANPRViewer.Models;
+using OpenCvSharp;
 using OpenCvSharp.WpfExtensions;
 using System;
 using System.Diagnostics;
+using System.Management;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using ANPRViewer.Models;
+using System.Windows.Threading;
 
 namespace ANPRViewer.Controls
 {
@@ -46,7 +48,7 @@ namespace ANPRViewer.Controls
             _cancellationTokenSource = new CancellationTokenSource();
             _ = StartCameraAsync(camera.RtspUrl, _cancellationTokenSource.Token);
         }
-
+        //streaming de video
         private async Task StartCameraAsync(string rtspUrl, CancellationToken token)
         {
             if (string.IsNullOrWhiteSpace(rtspUrl))
@@ -64,15 +66,15 @@ namespace ANPRViewer.Controls
                 _capture?.Release();
                 _capture?.Dispose();
 
-                // 🔹 Abrir con backend FFMPEG (más estable para RTSP)
+                // 🔹 Usar backend FFMPEG para RTSP (más estable que el default)
                 _capture = new VideoCapture(rtspUrl, VideoCaptureAPIs.FFMPEG);
 
-                // 🔹 Ajustes clave (igual al código viejo)
-                _capture.Set(VideoCaptureProperties.BufferSize, 1); // evitar acumulación
-                _capture.Set(VideoCaptureProperties.FourCC, FourCC.H264); // codec correcto
-                _capture.Set(VideoCaptureProperties.Fps, 30); // estabilizar a 30fps
-                _capture.Set(VideoCaptureProperties.FrameWidth, 1280);
-                _capture.Set(VideoCaptureProperties.FrameHeight, 720);
+                // 🔹 Ajustes de streaming (ajustables según tu cámara)
+                _capture.Set(VideoCaptureProperties.BufferSize, 1);         // descartar frames viejos
+                _capture.Set(VideoCaptureProperties.FourCC, FourCC.H264);   // codec H.264
+                _capture.Set(VideoCaptureProperties.Fps, 30);               // 30 fps estables
+                _capture.Set(VideoCaptureProperties.FrameWidth, 1280);      // ancho (ajustable según cámara)
+                _capture.Set(VideoCaptureProperties.FrameHeight, 720);      // alto (ajustable según cámara)
 
                 if (!_capture.IsOpened())
                 {
@@ -98,32 +100,29 @@ namespace ANPRViewer.Controls
 
                 using var frame = new Mat();
 
+                // 🔹 Loop principal SOLO para mostrar el último frame disponible
                 while (!token.IsCancellationRequested && _capture.IsOpened() && !_isDisposed)
                 {
-                    // 🔹 Usamos Grab + Retrieve en vez de Read (menos delay)
                     if (!_capture.Grab() || !_capture.Retrieve(frame) || frame.Empty())
                     {
-                        await Task.Delay(30, token); // breve pausa si no hay frame
+                        await Task.Delay(30, token); // pequeña pausa si no hay frame
                         continue;
                     }
 
-                    // Convertir a WriteableBitmap y congelar (mejor rendimiento en WPF)
                     var image = frame.ToWriteableBitmap();
-                    image.Freeze();
+                    image.Freeze(); // optimiza acceso en WPF
 
-                    if (!token.IsCancellationRequested)
+                    // 🔹 Renderizar en el hilo de UI con prioridad alta
+                    Dispatcher.BeginInvoke(new Action(() =>
                     {
-                        await Dispatcher.InvokeAsync(() =>
+                        if (!_isDisposed) // ✅ corregido: solo si el control sigue activo
                         {
-                            if (!_isDisposed)
-                            {
-                                CameraImage.Source = image;
-                                NoVideoOverlay.Visibility = Visibility.Collapsed;
-                            }
-                        });
-                    }
+                            CameraImage.Source = image;
+                            NoVideoOverlay.Visibility = Visibility.Collapsed;
+                        }
+                    }), DispatcherPriority.Render);
 
-                    // 🔹 Mantener frame rate estable (≈30fps)
+                    // 🔹 Mantener frame rate cercano a 30fps
                     await Task.Delay(33, token);
                 }
             }
@@ -157,6 +156,7 @@ namespace ANPRViewer.Controls
                 }
             }
         }
+
 
         private void ShowError(string message)
         {
