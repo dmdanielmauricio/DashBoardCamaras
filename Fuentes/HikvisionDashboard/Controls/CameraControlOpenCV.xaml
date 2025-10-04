@@ -36,7 +36,7 @@
             <!-- Video Player (aprovecha todo el espacio) -->
             <Image x:Name="CameraImage"
                Grid.Row="1"
-               Stretch="UniformToFill"
+               Stretch="Uniform"
                ClipToBounds="True"/>
 
             <!-- Overlay para cuando no hay video -->

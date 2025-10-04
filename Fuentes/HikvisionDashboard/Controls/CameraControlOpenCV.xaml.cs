@@ -66,15 +66,26 @@ namespace ANPRViewer.Controls
                 _capture?.Release();
                 _capture?.Dispose();
 
-                // 🔹 Usar backend FFMPEG para RTSP (más estable que el default)
-                _capture = new VideoCapture(rtspUrl, VideoCaptureAPIs.FFMPEG);
+                // 🔹 Pipeline GStreamer optimizado para baja latencia
+                string pipeline = $"rtspsrc location={rtspUrl} latency=0 protocols=tcp drop-on-latency=true " +
+                                 $"! queue max-size-buffers=1 leaky=downstream " +
+                                 $"! rtph264depay ! h264parse ! avdec_h264 max-threads=2 " +
+                                 $"! videoconvert ! video/x-raw,format=BGR " +
+                                 $"! appsink drop=true max-buffers=1 emit-signals=true sync=false";
 
-                // 🔹 Ajustes de streaming (ajustables según tu cámara)
-                _capture.Set(VideoCaptureProperties.BufferSize, 1);         // descartar frames viejos
-                _capture.Set(VideoCaptureProperties.FourCC, FourCC.H264);   // codec H.264
-                _capture.Set(VideoCaptureProperties.Fps, 30);               // 30 fps estables
-                _capture.Set(VideoCaptureProperties.FrameWidth, 1280);      // ancho (ajustable según cámara)
-                _capture.Set(VideoCaptureProperties.FrameHeight, 720);      // alto (ajustable según cámara)
+                _capture = new VideoCapture(pipeline, VideoCaptureAPIs.GSTREAMER);
+
+                // 🔹 Fallback a FFMPEG con configuración de baja latencia
+                if (!_capture.IsOpened())
+                {
+                    _capture?.Release();
+                    _capture?.Dispose();
+                    _capture = new VideoCapture(rtspUrl, VideoCaptureAPIs.FFMPEG);
+
+                    // Configurar FFMPEG para baja latencia
+                    _capture.Set(VideoCaptureProperties.BufferSize, 1);
+                    _capture.Set(VideoCaptureProperties.FourCC, VideoWriter.FourCC('H', '2', '6', '4'));
+                }
 
                 if (!_capture.IsOpened())
                 {
@@ -91,40 +102,70 @@ namespace ANPRViewer.Controls
                 await Dispatcher.InvokeAsync(() =>
                 {
                     StatusIndicator.Fill = Brushes.Green;
-                    QualityText.Text = "Conectado";
-                    _isPlaying = true;
-                    PlayPauseButton.Content = "⏸";
+                    QualityText.Text = "Conectado (GStreamer)";
+                    NoVideoOverlay.Visibility = Visibility.Collapsed;
                 });
 
                 ConnectionStatusChanged?.Invoke(_camera!, true);
 
-                using var frame = new Mat();
-
-                // 🔹 Loop principal SOLO para mostrar el último frame disponible
-                while (!token.IsCancellationRequested && _capture.IsOpened() && !_isDisposed)
+                // 🔹 Proceso de frames en thread separado para máximo rendimiento
+                await Task.Run(async () =>
                 {
-                    if (!_capture.Grab() || !_capture.Retrieve(frame) || frame.Empty())
-                    {
-                        await Task.Delay(30, token); // pequeña pausa si no hay frame
-                        continue;
-                    }
+                    using var frame = new Mat();
+                    var frameCount = 0;
+                    var lastUpdate = DateTime.Now;
 
-                    var image = frame.ToWriteableBitmap();
-                    image.Freeze(); // optimiza acceso en WPF
-
-                    // 🔹 Renderizar en el hilo de UI con prioridad alta
-                    Dispatcher.BeginInvoke(new Action(() =>
+                    while (!token.IsCancellationRequested && _capture.IsOpened() && !_isDisposed)
                     {
-                        if (!_isDisposed) // ✅ corregido: solo si el control sigue activo
+                        try
                         {
-                            CameraImage.Source = image;
-                            NoVideoOverlay.Visibility = Visibility.Collapsed;
-                        }
-                    }), DispatcherPriority.Render);
+                            // Leer frame (esto es bloqueante pero eficiente)
+                            if (!_capture.Grab())
+                            {
+                                await Task.Delay(5, token);
+                                continue;
+                            }
 
-                    // 🔹 Mantener frame rate cercano a 30fps
-                    await Task.Delay(33, token);
-                }
+                            if (!_capture.Retrieve(frame) || frame.Empty())
+                            {
+                                continue;
+                            }
+
+                            frameCount++;
+
+                            // 🔹 Convertir a WriteableBitmap de forma eficiente
+                            var image = frame.ToWriteableBitmap();
+                            image.Freeze(); // Freeze para poder usar en otro thread
+
+                            // 🔹 Actualizar UI con prioridad alta pero sin bloquear
+                            await Dispatcher.InvokeAsync(() =>
+                            {
+                                if (!_isDisposed)
+                                {
+                                    CameraImage.Source = image;
+
+                                    // Actualizar FPS cada segundo
+                                    var now = DateTime.Now;
+                                    if ((now - lastUpdate).TotalSeconds >= 1.0)
+                                    {
+                                        var fps = frameCount / (now - lastUpdate).TotalSeconds;
+                                        QualityText.Text = $"Conectado - {fps:F1} FPS";
+                                        frameCount = 0;
+                                        lastUpdate = now;
+                                    }
+                                }
+                            }, DispatcherPriority.Send); // Send en vez de Render para mayor prioridad
+
+                            // 🔹 Pequeño yield para no saturar el CPU
+                            await Task.Yield();
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            Debug.WriteLine($"Error procesando frame: {ex.Message}");
+                            await Task.Delay(10, token);
+                        }
+                    }
+                }, token);
             }
             catch (OperationCanceledException)
             {
@@ -145,17 +186,21 @@ namespace ANPRViewer.Controls
             }
             finally
             {
+                _capture?.Release();
+                _capture?.Dispose();
+
                 if (!_isDisposed)
                 {
                     await Dispatcher.InvokeAsync(() =>
                     {
-                        _isPlaying = false;
-                        PlayPauseButton.Content = "▶";
                         QualityText.Text = "Desconectado";
+                        StatusIndicator.Fill = Brushes.Gray;
+                        NoVideoOverlay.Visibility = Visibility.Visible;
                     });
                 }
             }
         }
+
 
 
         private void ShowError(string message)
