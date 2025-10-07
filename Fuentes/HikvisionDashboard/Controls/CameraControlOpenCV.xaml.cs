@@ -3,7 +3,6 @@ using OpenCvSharp;
 using OpenCvSharp.WpfExtensions;
 using System;
 using System.Diagnostics;
-using System.Management;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -19,8 +18,8 @@ namespace ANPRViewer.Controls
         private VideoCapture? _capture;
         private CancellationTokenSource? _cancellationTokenSource;
         private ANPRCamera? _camera;
-        private bool _isPlaying = false;
         private bool _isDisposed = false;
+        private bool _isPlaying = false;
 
         public event Action<string>? ErrorOccurred;
         public event Action<ANPRCamera, bool>? ConnectionStatusChanged;
@@ -42,13 +41,12 @@ namespace ANPRViewer.Controls
                 StatusIndicator.Fill = Brushes.Orange;
             });
 
-            _cancellationTokenSource?.Cancel();
-            _cancellationTokenSource?.Dispose();
+            StopCamera();
 
             _cancellationTokenSource = new CancellationTokenSource();
             _ = StartCameraAsync(camera.RtspUrl, _cancellationTokenSource.Token);
         }
-        //streaming de video
+
         private async Task StartCameraAsync(string rtspUrl, CancellationToken token)
         {
             if (string.IsNullOrWhiteSpace(rtspUrl))
@@ -66,23 +64,20 @@ namespace ANPRViewer.Controls
                 _capture?.Release();
                 _capture?.Dispose();
 
-                // 🔹 Pipeline GStreamer optimizado para baja latencia
-                string pipeline = $"rtspsrc location={rtspUrl} latency=0 protocols=tcp drop-on-latency=true " +
-                                 $"! queue max-size-buffers=1 leaky=downstream " +
-                                 $"! rtph264depay ! h264parse ! avdec_h264 max-threads=2 " +
-                                 $"! videoconvert ! video/x-raw,format=BGR " +
-                                 $"! appsink drop=true max-buffers=1 emit-signals=true sync=false";
+                string pipeline =
+                    $"rtspsrc location={rtspUrl} latency=0 protocols=tcp drop-on-latency=true " +
+                    $"! queue max-size-buffers=1 leaky=downstream " +
+                    $"! rtph264depay ! h264parse ! avdec_h264 max-threads=2 " +
+                    $"! videoconvert ! video/x-raw,format=BGR " +
+                    $"! appsink drop=true max-buffers=1 emit-signals=true sync=false";
 
                 _capture = new VideoCapture(pipeline, VideoCaptureAPIs.GSTREAMER);
 
-                // 🔹 Fallback a FFMPEG con configuración de baja latencia
                 if (!_capture.IsOpened())
                 {
                     _capture?.Release();
                     _capture?.Dispose();
                     _capture = new VideoCapture(rtspUrl, VideoCaptureAPIs.FFMPEG);
-
-                    // Configurar FFMPEG para baja latencia
                     _capture.Set(VideoCaptureProperties.BufferSize, 1);
                     _capture.Set(VideoCaptureProperties.FourCC, VideoWriter.FourCC('H', '2', '6', '4'));
                 }
@@ -94,6 +89,7 @@ namespace ANPRViewer.Controls
                         ShowError($"No se pudo conectar a: {_camera?.Name}");
                         StatusIndicator.Fill = Brushes.Red;
                     });
+
                     ErrorOccurred?.Invoke($"No se pudo abrir cámara: {_camera?.Name}");
                     ConnectionStatusChanged?.Invoke(_camera!, false);
                     return;
@@ -102,16 +98,15 @@ namespace ANPRViewer.Controls
                 await Dispatcher.InvokeAsync(() =>
                 {
                     StatusIndicator.Fill = Brushes.Green;
-                    QualityText.Text = "Conectado (GStreamer)";
+                    QualityText.Text = "Conectado";
                     NoVideoOverlay.Visibility = Visibility.Collapsed;
                 });
 
                 ConnectionStatusChanged?.Invoke(_camera!, true);
+                _isPlaying = true;
 
-                // 🔹 Proceso de frames en thread separado para máximo rendimiento
                 await Task.Run(async () =>
                 {
-                    using var frame = new Mat();
                     var frameCount = 0;
                     var lastUpdate = DateTime.Now;
 
@@ -119,32 +114,28 @@ namespace ANPRViewer.Controls
                     {
                         try
                         {
-                            // Leer frame (esto es bloqueante pero eficiente)
-                            if (!_capture.Grab())
+                            using (var frame = new Mat())
                             {
-                                await Task.Delay(5, token);
-                                continue;
-                            }
-
-                            if (!_capture.Retrieve(frame) || frame.Empty())
-                            {
-                                continue;
-                            }
-
-                            frameCount++;
-
-                            // 🔹 Convertir a WriteableBitmap de forma eficiente
-                            var image = frame.ToWriteableBitmap();
-                            image.Freeze(); // Freeze para poder usar en otro thread
-
-                            // 🔹 Actualizar UI con prioridad alta pero sin bloquear
-                            await Dispatcher.InvokeAsync(() =>
-                            {
-                                if (!_isDisposed)
+                                if (!_capture.Read(frame) || frame.Empty())
                                 {
+                                    await Task.Delay(5, token);
+                                    continue;
+                                }
+
+                                frameCount++;
+
+                                var image = frame.ToWriteableBitmap();
+                                image.Freeze();
+
+                                await Dispatcher.InvokeAsync(() =>
+                                {
+                                    if (_isDisposed) return;
+
+                                    if (CameraImage.Source is BitmapSource oldSource)
+                                        oldSource = null;
+
                                     CameraImage.Source = image;
 
-                                    // Actualizar FPS cada segundo
                                     var now = DateTime.Now;
                                     if ((now - lastUpdate).TotalSeconds >= 1.0)
                                     {
@@ -153,13 +144,24 @@ namespace ANPRViewer.Controls
                                         frameCount = 0;
                                         lastUpdate = now;
                                     }
-                                }
-                            }, DispatcherPriority.Send); // Send en vez de Render para mayor prioridad
+                                }, DispatcherPriority.Render);
+                            }
 
-                            // 🔹 Pequeño yield para no saturar el CPU
-                            await Task.Yield();
+                            // Liberar presión del CPU y memoria
+                            await Task.Delay(1, token);
+
+                            // Recolección ligera cada 100 frames
+                            if (frameCount % 100 == 0)
+                            {
+                                GC.Collect();
+                                GC.WaitForPendingFinalizers();
+                            }
                         }
-                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        catch (OperationCanceledException)
+                        {
+                            break;
+                        }
+                        catch (Exception ex)
                         {
                             Debug.WriteLine($"Error procesando frame: {ex.Message}");
                             await Task.Delay(10, token);
@@ -186,22 +188,51 @@ namespace ANPRViewer.Controls
             }
             finally
             {
-                _capture?.Release();
-                _capture?.Dispose();
-
-                if (!_isDisposed)
+                try
                 {
-                    await Dispatcher.InvokeAsync(() =>
+                    _capture?.Release();
+                    _capture?.Dispose();
+
+                    if (!_isDisposed)
                     {
-                        QualityText.Text = "Desconectado";
-                        StatusIndicator.Fill = Brushes.Gray;
-                        NoVideoOverlay.Visibility = Visibility.Visible;
-                    });
+                        await Dispatcher.InvokeAsync(() =>
+                        {
+                            CameraImage.Source = null;
+                            QualityText.Text = "Desconectado";
+                            StatusIndicator.Fill = Brushes.Gray;
+                            NoVideoOverlay.Visibility = Visibility.Visible;
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Error liberando cámara: {ex.Message}");
                 }
             }
         }
 
+        private void StopCamera()
+        {
+            try
+            {
+                _cancellationTokenSource?.Cancel();
+                _capture?.Release();
+                _capture?.Dispose();
+                _cancellationTokenSource?.Dispose();
+                _cancellationTokenSource = null;
 
+                Dispatcher.Invoke(() =>
+                {
+                    CameraImage.Source = null;
+                    QualityText.Text = "Detenido";
+                    StatusIndicator.Fill = Brushes.Gray;
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error deteniendo cámara: {ex.Message}");
+            }
+        }
 
         private void ShowError(string message)
         {
@@ -216,9 +247,8 @@ namespace ANPRViewer.Controls
 
             if (_isPlaying)
             {
-                _cancellationTokenSource?.Cancel();
-                StatusIndicator.Fill = Brushes.Gray;
-                QualityText.Text = "Pausado";
+                StopCamera();
+                _isPlaying = false;
             }
             else
             {
@@ -230,7 +260,7 @@ namespace ANPRViewer.Controls
         {
             if (_camera != null)
             {
-                _cancellationTokenSource?.Cancel();
+                StopCamera();
                 await Task.Delay(500);
                 SetCamera(_camera);
             }
@@ -239,15 +269,12 @@ namespace ANPRViewer.Controls
         public void Dispose()
         {
             if (_isDisposed) return;
-
             _isDisposed = true;
 
             try
             {
-                _cancellationTokenSource?.Cancel();
-                _capture?.Release();
-                _capture?.Dispose();
-                _cancellationTokenSource?.Dispose();
+                StopCamera();
+                Dispatcher.Invoke(() => CameraImage.Source = null);
             }
             catch (Exception ex)
             {
